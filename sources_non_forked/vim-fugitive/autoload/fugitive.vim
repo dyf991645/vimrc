@@ -2884,6 +2884,24 @@ function! fugitive#BufReadStatus(...) abort
       endfor
     endif
 
+    let sequencing = []
+    if filereadable(fugitive#Find('.git/sequencer/todo'))
+      for line in reverse(readfile(fugitive#Find('.git/sequencer/todo')))
+        let match = matchlist(line, '^\(\l\+\)\s\+\(\x\{4,\}\)\s\+\(.*\)')
+        if len(match) && match[1] !~# 'exec\|merge\|label'
+          call add(sequencing, {'type': 'Rebase', 'status': get(s:rebase_abbrevs, match[1], match[1]), 'commit': match[2], 'subject': match[3]})
+        endif
+      endfor
+    elseif filereadable(fugitive#Find('.git/MERGE_MSG'))
+      if filereadable(fugitive#Find('.git/CHERRY_PICK_HEAD'))
+        let pick_head = fugitive#Execute(['rev-parse', '--short', 'CHERRY_PICK_HEAD', '--']).stdout[0]
+        call add(sequencing, {'type': 'Rebase', 'status': 'pick', 'commit': pick_head, 'subject': get(readfile(fugitive#Find('.git/MERGE_MSG')), 0, '')})
+      elseif filereadable(fugitive#Find('.git/REVERT_HEAD'))
+        let pick_head = fugitive#Execute(['rev-parse', '--short', 'REVERT_HEAD', '--']).stdout[0]
+        call add(sequencing, {'type': 'Rebase', 'status': 'revert', 'commit': pick_head, 'subject': get(readfile(fugitive#Find('.git/MERGE_MSG')), 0, '')})
+      endif
+    endif
+
     let b:fugitive_diff = diff
     if get(a:, 1, v:cmdbang)
       unlet! b:fugitive_expanded
@@ -2910,6 +2928,7 @@ function! fugitive#BufReadStatus(...) abort
     endif
 
     call s:AddSection('Rebasing ' . rebasing_head, rebasing)
+    call s:AddSection(get(get(sequencing, 0, {}), 'status', '') ==# 'revert' ? 'Reverting' : 'Cherry Picking', sequencing)
     call s:AddSection('Untracked', untracked)
     call s:AddSection('Unstaged', unstaged)
     let unstaged_end = len(unstaged) ? line('$') : 0
@@ -3188,12 +3207,12 @@ function! fugitive#BufReadCmd(...) abort
         setlocal bufhidden=delete
       endif
       let &l:modifiable = modifiable
+      call fugitive#MapJumps()
       if b:fugitive_type !=# 'blob'
-        setlocal filetype=git
         call s:Map('n', 'a', ":<C-U>let b:fugitive_display_format += v:count1<Bar>exe fugitive#BufReadCmd(@%)<CR>", '<silent>')
         call s:Map('n', 'i', ":<C-U>let b:fugitive_display_format -= v:count1<Bar>exe fugitive#BufReadCmd(@%)<CR>", '<silent>')
+        setlocal filetype=git
       endif
-      call fugitive#MapJumps()
     endtry
 
     setlocal modifiable
@@ -4265,7 +4284,7 @@ function! s:ReloadStatusBuffer(...) abort
   endif
   let original_lnum = a:0 ? a:1 : line('.')
   let info = s:StageInfo(original_lnum)
-  call fugitive#BufReadStatus(0)
+  exe fugitive#BufReadStatus(0)
   call setpos('.', [0, s:StageSeek(info, original_lnum), 1, 0])
   return ''
 endfunction
